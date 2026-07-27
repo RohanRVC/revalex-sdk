@@ -1,0 +1,116 @@
+name: "Revalex Regression Gate"
+description: "Fail the build when your AI agent's eval pass-rates regress versus baseline. Never ship a broken prompt again."
+branding:
+  icon: "shield"
+  color: "purple"
+
+inputs:
+  api-key:
+    description: "Revalex project API key (store as a repo secret)"
+    required: true
+  experiment-id:
+    description: "The candidate experiment to gate (created + evaluated by your harness step)"
+    required: true
+  baseline-experiment-id:
+    description: "Explicit baseline experiment. Omit to auto-use the latest completed experiment on the same dataset."
+    required: false
+    default: ""
+  max-regression-pp:
+    description: "Fail if any evaluator's pass rate drops more than this many percentage points"
+    required: false
+    default: "5"
+  min-pass-rate:
+    description: "Optional floor (0..1): fail if any evaluator's candidate pass rate is below this"
+    required: false
+    default: ""
+  api-url:
+    description: "Revalex API base URL"
+    required: false
+    default: "http://localhost:4000"
+  github-token:
+    description: "Pass ${{ github.token }} to also post the verdict as a PR comment"
+    required: false
+    default: ""
+
+outputs:
+  passed:
+    description: "true/false gate verdict"
+    value: ${{ steps.gate.outputs.passed }}
+
+runs:
+  using: "composite"
+  steps:
+    - id: gate
+      shell: bash
+      env:
+        REVALEX_API_KEY: ${{ inputs.api-key }}
+        EXPERIMENT_ID: ${{ inputs.experiment-id }}
+        BASELINE_ID: ${{ inputs.baseline-experiment-id }}
+        MAX_REGRESSION_PP: ${{ inputs.max-regression-pp }}
+        MIN_PASS_RATE: ${{ inputs.min-pass-rate }}
+        API_URL: ${{ inputs.api-url }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+      run: |
+        set -euo pipefail
+
+        BODY=$(jq -n \
+          --arg exp "$EXPERIMENT_ID" \
+          --arg base "$BASELINE_ID" \
+          --arg maxreg "$MAX_REGRESSION_PP" \
+          --arg minpr "$MIN_PASS_RATE" \
+          '{experimentId: $exp, maxRegressionPp: ($maxreg | tonumber)}
+           + (if $base != "" then {baselineExperimentId: $base} else {} end)
+           + (if $minpr != "" then {minPassRate: ($minpr | tonumber)} else {} end)')
+
+        HTTP_CODE=$(curl -sS -o /tmp/revalex_check.json -w "%{http_code}" \
+          -X POST "$API_URL/v1/checks" \
+          -H "authorization: Bearer $REVALEX_API_KEY" \
+          -H "content-type: application/json" \
+          -d "$BODY")
+
+        if [ "$HTTP_CODE" -ge 400 ]; then
+          echo "::error::Revalex check request failed ($HTTP_CODE): $(jq -r '.error.message // "unknown error"' /tmp/revalex_check.json 2>/dev/null)"
+          exit 1
+        fi
+
+        PASSED=$(jq -r '.passed' /tmp/revalex_check.json)
+        CAND=$(jq -r '.candidate.versionLabel' /tmp/revalex_check.json)
+        BASE=$(jq -r '.baseline.versionLabel // "none (first run)"' /tmp/revalex_check.json)
+        echo "passed=$PASSED" >> "$GITHUB_OUTPUT"
+
+        {
+          echo "## 🛡 Revalex Regression Gate — $([ "$PASSED" = "true" ] && echo '✅ PASSED' || echo '❌ FAILED')"
+          echo ""
+          echo "**Candidate:** \`$CAND\` · **Baseline:** \`$BASE\`"
+          echo ""
+          echo "| Evaluator | Baseline | Candidate | Δ | Verdict |"
+          echo "|---|---|---|---|---|"
+          jq -r '.verdicts[] | "| \(.evaluator) | \(if .passRateBaseline != null then ((.passRateBaseline*100|round|tostring) + "%") else "—" end) | \(if .passRateCandidate != null then ((.passRateCandidate*100|round|tostring) + "%") else "—" end) | \(if .deltaPp != null then ((if .deltaPp >= 0 then "+" else "" end) + (.deltaPp|round|tostring) + "pp") else "—" end) | \(if .ok then "✅" else "❌ " + .reason end) |"' /tmp/revalex_check.json
+          REG_COUNT=$(jq -r '.regressions | length' /tmp/revalex_check.json)
+          if [ "$REG_COUNT" -gt 0 ]; then
+            echo ""
+            echo "### ⚠ $REG_COUNT regression(s)"
+            jq -r '.regressions[] | "- **\(.evaluator)** on `\(.input)`\n  - before: \(.before)\n  - after: \(.after)"' /tmp/revalex_check.json
+          fi
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        # Console output too
+        jq -r '.verdicts[] | "\(if .ok then "PASS" else "FAIL" end)  \(.evaluator): \(.reason)"' /tmp/revalex_check.json
+
+        # PR-native report: post the same verdict as a PR comment.
+        if [ -n "$GH_TOKEN" ] && [ -n "${PR_NUMBER:-}" ]; then
+          BODY_MD=$(cat "$GITHUB_STEP_SUMMARY")
+          jq -n --arg body "$BODY_MD" '{body: $body}' > /tmp/revalex_comment.json
+          curl -sS -o /dev/null -X POST \
+            -H "authorization: Bearer $GH_TOKEN" \
+            -H "accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
+            -d @/tmp/revalex_comment.json || echo "::warning::could not post PR comment"
+        fi
+
+        if [ "$PASSED" != "true" ]; then
+          echo "::error::Revalex gate failed — eval pass rates regressed beyond threshold. See the job summary."
+          exit 1
+        fi
+        echo "Revalex gate passed ✅"

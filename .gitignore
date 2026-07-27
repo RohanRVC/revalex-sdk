@@ -1,0 +1,21 @@
+# Node / TypeScript
+node_modules/
+dist/
+.turbo/
+*.tsbuildinfo
+package-lock.json
+pnpm-lock.yaml
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+build/
+dist-python/
+
+# Misc
+.DS_Store
+.env
+.env.*

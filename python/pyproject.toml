@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "revalex"
+version = "0.1.0"
+description = "Revalex Python SDK — fail-open tracing for LLM/agent apps plus CI-gate harness helpers. Zero dependencies."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+keywords = ["llm", "evals", "agents", "observability", "ci"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Intended Audience :: Developers",
+]
+
+[tool.setuptools.packages.find]
+include = ["revalex*"]

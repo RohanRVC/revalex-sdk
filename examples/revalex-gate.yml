@@ -1,0 +1,49 @@
+# Example: gate every PR on your AI agent's eval suite.
+# Copy into your repo as .github/workflows/revalex-gate.yml
+#
+# Flow: (1) your harness runs your agent over a Revalex dataset and
+# creates+evaluates an experiment, (2) the Revalex gate action fails
+# the build if pass rates regressed vs the previous version.
+
+name: Revalex Regression Gate
+
+on:
+  pull_request:
+
+jobs:
+  eval-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 8
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # 1) Run YOUR agent over the dataset via @revalex/sdk and print the
+      #    experiment id. See examples/run-experiment.mjs for the shape.
+      - name: Run eval experiment
+        id: experiment
+        env:
+          REVALEX_API_KEY: ${{ secrets.REVALEX_API_KEY }}
+          REVALEX_DATASET_ID: ${{ vars.REVALEX_DATASET_ID }}
+        run: |
+          EXPERIMENT_ID=$(node examples/run-experiment.mjs)
+          echo "id=$EXPERIMENT_ID" >> "$GITHUB_OUTPUT"
+
+      # 2) The gate: fail the PR if any evaluator regressed >5pp.
+      - name: Revalex gate
+        uses: RohanRVC/revalex-sdk/action@main
+        with:
+          api-key: ${{ secrets.REVALEX_API_KEY }}
+          experiment-id: ${{ steps.experiment.outputs.id }}
+          max-regression-pp: "5"
+          api-url: ${{ vars.REVALEX_API_URL }}
