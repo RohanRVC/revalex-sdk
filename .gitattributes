@@ -1,0 +1,5 @@
+# Normalize line endings to LF everywhere so cross-platform syncs are deterministic.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.gif binary
