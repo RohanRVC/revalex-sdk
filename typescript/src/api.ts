@@ -41,6 +41,21 @@ export interface CheckOptions {
   baselineExperimentId?: string;
   maxRegressionPp?: number;
   minPassRate?: number;
+  /** The behavioral rule: fail on NEW risky tools vs baseline (default true server-side). */
+  behavioralGate?: boolean;
+  /** Strict mode: new unclassified tools also fail the gate. */
+  failOnUnclassified?: boolean;
+}
+
+/** One behavioral finding from the Behavioral Diff Gate. */
+export interface BehaviorFinding {
+  kind: "new_risky_tool" | "new_unclassified_tool" | "risky_call_delta";
+  tool: string;
+  risk: string;
+  baselineCalls: number;
+  candidateCalls: number;
+  failing: boolean;
+  reason: string;
 }
 
 export interface CheckVerdict {
@@ -56,9 +71,11 @@ export interface CheckResponse {
   passed: boolean;
   candidate: { id: string; versionLabel: string; resultCount: number };
   baseline: { id: string; versionLabel: string; resultCount: number } | null;
-  policy: { maxRegressionPp: number; minPassRate: number | null };
+  policy: { maxRegressionPp: number; minPassRate: number | null; behavioralGate?: boolean };
   verdicts: CheckVerdict[];
   regressions: Array<{ datasetItemId: string; input: string; evaluator: string; before: string; after: string }>;
+  /** Behavioral Diff Gate findings (null when behavioralGate is off). */
+  behavior?: { newTools: string[]; findings: BehaviorFinding[] } | null;
 }
 
 export class RevalexApi {
@@ -138,6 +155,8 @@ export class RevalexApi {
     baselineExperimentId?: string;
     maxRegressionPp?: number;
     minPassRate?: number;
+    behavioralGate?: boolean;
+    failOnUnclassified?: boolean;
   }): Promise<CheckResponse> {
     const items = await this.getDatasetItems(opts.datasetId);
     if (items.length === 0) throw new RevalexApiError(400, "dataset has no items");
@@ -156,6 +175,8 @@ export class RevalexApi {
       baselineExperimentId: opts.baselineExperimentId,
       maxRegressionPp: opts.maxRegressionPp,
       minPassRate: opts.minPassRate,
+      behavioralGate: opts.behavioralGate,
+      failOnUnclassified: opts.failOnUnclassified,
     });
   }
 }

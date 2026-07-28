@@ -47,6 +47,14 @@ export const StepSchema = z.object({
   output: boundedString().optional(),
   /** Tool steps: which tool + whether it succeeded. */
   toolName: boundedString(LIMITS.MAX_NAME_LEN).optional(),
+  /* ── Action Taxonomy (optional; the server can also classify via its
+   *    per-project tool registry). Turns a tool call into a risk-aware
+   *    action: what kind of access, can it be undone, what's the blast
+   *    radius, does it touch sensitive data. ── */
+  access: z.enum(["read", "write"]).optional(),
+  reversibility: z.enum(["reversible", "irreversible"]).optional(),
+  impact: z.enum(["money", "data", "external", "internal", "none"]).optional(),
+  sensitive: z.boolean().optional(),
   status: TraceStatusSchema.default("ok"),
   errorMessage: boundedString(4_000).optional(),
   model: boundedString(LIMITS.MAX_NAME_LEN).optional(),
