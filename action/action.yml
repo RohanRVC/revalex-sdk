@@ -31,6 +31,10 @@ inputs:
     description: "Strict mode: NEW tools with no risk classification also fail the gate"
     required: false
     default: "false"
+  strict-safety:
+    description: "Fail unless an action-safety check actually produced verdicts on the candidate (a skipped safety gate never passes)"
+    required: false
+    default: "false"
   api-url:
     description: "Revalex API base URL"
     required: false
@@ -58,6 +62,7 @@ runs:
         MIN_PASS_RATE: ${{ inputs.min-pass-rate }}
         BEHAVIORAL_GATE: ${{ inputs.behavioral-gate }}
         FAIL_ON_UNCLASSIFIED: ${{ inputs.fail-on-unclassified }}
+        STRICT_SAFETY: ${{ inputs.strict-safety }}
         API_URL: ${{ inputs.api-url }}
         GH_TOKEN: ${{ inputs.github-token }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -71,8 +76,10 @@ runs:
           --arg minpr "$MIN_PASS_RATE" \
           --arg bgate "$BEHAVIORAL_GATE" \
           --arg unclass "$FAIL_ON_UNCLASSIFIED" \
+          --arg strict "$STRICT_SAFETY" \
           '{experimentId: $exp, maxRegressionPp: ($maxreg | tonumber),
-            behavioralGate: ($bgate == "true"), failOnUnclassified: ($unclass == "true")}
+            behavioralGate: ($bgate == "true"), failOnUnclassified: ($unclass == "true"),
+            strictSafety: ($strict == "true")}
            + (if $base != "" then {baselineExperimentId: $base} else {} end)
            + (if $minpr != "" then {minPassRate: ($minpr | tonumber)} else {} end)')
 

@@ -45,6 +45,9 @@ export interface CheckOptions {
   behavioralGate?: boolean;
   /** Strict mode: new unclassified tools also fail the gate. */
   failOnUnclassified?: boolean;
+  /** Strict safety: fail unless an action-safety check actually produced
+   *  verdicts on the candidate (a skipped safety gate ≠ a passed one). */
+  strictSafety?: boolean;
 }
 
 /** One behavioral finding from the Behavioral Diff Gate. */
@@ -157,6 +160,7 @@ export class RevalexApi {
     minPassRate?: number;
     behavioralGate?: boolean;
     failOnUnclassified?: boolean;
+    strictSafety?: boolean;
   }): Promise<CheckResponse> {
     const items = await this.getDatasetItems(opts.datasetId);
     if (items.length === 0) throw new RevalexApiError(400, "dataset has no items");
@@ -177,6 +181,7 @@ export class RevalexApi {
       minPassRate: opts.minPassRate,
       behavioralGate: opts.behavioralGate,
       failOnUnclassified: opts.failOnUnclassified,
+      strictSafety: opts.strictSafety,
     });
   }
 }
