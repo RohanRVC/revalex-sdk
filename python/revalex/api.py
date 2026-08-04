@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, List, Optional
 
 from ._wire import http_json, to_wire_result
+from .client import DEFAULT_BASE_URL, _env_base_url
 
 
 class RevalexApiError(Exception):
@@ -20,14 +21,21 @@ class RevalexApiError(Exception):
 
 
 class RevalexApi:
-    def __init__(self, api_key: str, base_url: str = "http://localhost:4000") -> None:
+    def __init__(self, api_key: str, base_url: Optional[str] = None, timeout: float = 30.0) -> None:
         if not api_key:
             raise RevalexApiError(401, "RevalexApi: api_key is required")
         self._api_key = api_key
-        self._base_url = base_url.rstrip("/")
+        self._base_url = (base_url or _env_base_url() or DEFAULT_BASE_URL).rstrip("/")
+        self._timeout = timeout
 
-    def _request(self, method: str, path: str, body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        status, parsed = http_json(method, f"{self._base_url}{path}", self._api_key, body)
+    def _request(
+        self, method: str, path: str, body: Optional[Dict[str, Any]] = None,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        status, parsed = http_json(
+            method, f"{self._base_url}{path}", self._api_key, body,
+            timeout=timeout if timeout is not None else self._timeout,
+        )
         if status >= 400:
             message = "request failed"
             if isinstance(parsed, dict):
@@ -39,9 +47,20 @@ class RevalexApi:
 
     # ── the harness surface ───────────────────────────────────────
 
-    def get_dataset_items(self, dataset_id: str) -> List[Dict[str, Any]]:
-        """Fetch a dataset's items — the inputs your harness should run."""
-        return self._request("GET", f"/v1/datasets/{dataset_id}")["items"]
+    def get_dataset_items(self, dataset_id: str, limit: int = 1000) -> List[Dict[str, Any]]:
+        """Fetch a dataset's items - the inputs your harness should run.
+
+        Raises when the dataset is bigger than what came back: a CI gate that
+        silently ran on the newest subset reads as full coverage."""
+        r = self._request("GET", f"/v1/datasets/{dataset_id}?limit={max(1, min(limit, 1000))}")
+        items = r["items"]
+        total = r.get("totalItems")
+        if isinstance(total, int) and total > len(items):
+            raise RevalexApiError(
+                400,
+                f"dataset has {total} items but only {len(items)} were returned - the CI gate must run on the full set",
+            )
+        return items
 
     def create_experiment(self, dataset_id: str, version_label: str) -> Dict[str, Any]:
         return self._request(
@@ -49,15 +68,26 @@ class RevalexApi:
         )["experiment"]
 
     def submit_results(self, experiment_id: str, results: List[Dict[str, Any]]) -> int:
-        """Submit outputs. Each result: {dataset_item_id, output, steps?} (snake or camel)."""
-        wire = [to_wire_result(r) for r in results]
-        return self._request("POST", f"/v1/experiments/{experiment_id}/results", {"results": wire})[
-            "submitted"
-        ]
+        """Submit outputs. Each result: {dataset_item_id, output, steps?} (snake or camel).
 
-    def evaluate(self, experiment_id: str) -> Dict[str, Any]:
-        """Grade all submitted results with the project's evaluators."""
-        return self._request("POST", f"/v1/experiments/{experiment_id}/evaluate", {})
+        Chunked by the server's 100-result cap, so 101+-item datasets work
+        instead of failing AFTER the harness paid for every agent run."""
+        wire = [to_wire_result(r) for r in results]
+        submitted = 0
+        for i in range(0, len(wire), 100):
+            submitted += self._request(
+                "POST", f"/v1/experiments/{experiment_id}/results", {"results": wire[i : i + 100]}
+            )["submitted"]
+        return submitted
+
+    def evaluate(self, experiment_id: str, timeout: float = 600.0) -> Dict[str, Any]:
+        """Grade all submitted results with the project's evaluators.
+
+        Synchronous on the server: it grades every (result x evaluator) pair
+        before answering, and model-graded pairs take seconds each. The old
+        fixed 30s wire timeout aborted every realistic CI dataset CLIENT-side
+        while the server kept grading - then the retry double-billed."""
+        return self._request("POST", f"/v1/experiments/{experiment_id}/evaluate", {}, timeout=timeout)
 
     def check(
         self,

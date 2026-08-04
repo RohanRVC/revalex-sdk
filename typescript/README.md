@@ -36,6 +36,12 @@ instrumentOpenAI(openai, revalex);       // every chat.completions.create traced
 // privacy: instrumentAnthropic(anthropic, revalex, { captureContent: false })
 ```
 
+> **Auto-instrument records `llm_call` traces** — great for cost/latency
+> observability, but the **action-safety checks grade `agent_run` traces** (with
+> the tool `steps` your agent actually ran). Auto-instrument alone does NOT run
+> the safety guards; emit an `agent_run` (see the trace example above) for
+> action-safety and the Behavioral Diff Gate to grade your agent's behavior.
+
 ## CI harness (throws loudly — a broken pipeline must fail the build)
 
 ```ts

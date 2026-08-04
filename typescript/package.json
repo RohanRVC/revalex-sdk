@@ -1,13 +1,32 @@
 {
   "name": "@revalex/sdk",
   "version": "0.1.0",
-  "description": "Revalex tracing SDK — capture LLM calls and agent runs with zero risk to your app. Fail-open, batched, async. Includes CI-gate harness helpers and one-line Anthropic/OpenAI auto-instrumentation.",
+  "description": "Revalex tracing SDK \u2014 capture LLM calls and agent runs with zero risk to your app. Fail-open, batched, async. Includes CI-gate harness helpers and one-line Anthropic/OpenAI auto-instrumentation.",
   "license": "MIT",
-  "keywords": ["llm", "evals", "agents", "observability", "tracing", "ci", "anthropic", "openai"],
-  "repository": { "type": "git", "url": "https://github.com/RohanRVC/revalex-sdk.git", "directory": "typescript" },
+  "keywords": [
+    "llm",
+    "evals",
+    "agents",
+    "observability",
+    "tracing",
+    "ci",
+    "anthropic",
+    "openai"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/RohanRVC/revalex-sdk.git",
+    "directory": "typescript"
+  },
   "homepage": "https://github.com/RohanRVC/revalex-sdk#readme",
-  "files": ["dist", "README.md", "LICENSE"],
-  "publishConfig": { "access": "public" },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -27,7 +46,7 @@
   },
   "devDependencies": {
     "typescript": "^5.7.2",
-    "vitest": "^2.1.8"
+    "vitest": "^3.2.6"
   },
   "engines": {
     "node": ">=18"

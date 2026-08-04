@@ -48,25 +48,57 @@ export function instrumentAnthropic<T extends AnthropicLike>(
   const original = client.messages.create.bind(client.messages);
   const capture = opts.captureContent ?? true;
 
-  client.messages.create = async (params: any, ...rest: any[]) => {
+  client.messages.create = ((params: any, ...rest: any[]) => {
     const startedAt = new Date().toISOString();
     const t0 = Date.now();
+    let call: Promise<any>;
     try {
-      const result = await original(params, ...rest);
+      call = original(params, ...rest);
+    } catch (err) {
+      recordFailure(err);
+      throw err;
+    }
+    // Observe on a SEPARATE chain and return the ORIGINAL object: the
+    // provider's create() returns an APIPromise whose .withResponse() /
+    // .asResponse() callers broke when we replaced it with a plain async
+    // function. Our .then never alters what the caller receives, and the
+    // rejection stays theirs to handle (we observe, not consume).
+    void Promise.resolve(call).then(recordSuccess, recordFailure);
+    return call;
+
+    function recordSuccess(result: any): void {
       try {
         const streaming = params?.stream === true;
+        const blocks: any[] = streaming ? [] : (result?.content ?? []);
         const textOut = streaming
           ? undefined
-          : (result?.content ?? [])
+          : blocks
               .filter((b: any) => b?.type === "text")
               .map((b: any) => b.text)
               .join("\n");
+        // Capture the model's INTENDED tool calls. These blocks were being
+        // dropped, so an auto-instrumented trace had no steps at all and the
+        // dashboard's "what it planned" section never rendered. They are the
+        // agent's intent, not observed evidence — the provenance check
+        // deliberately ignores llm_call content for exactly that reason.
+        const planned = blocks
+          .filter((b: any) => b?.type === "tool_use")
+          .slice(0, 50)
+          .map((b: any, i: number) => ({
+            index: i,
+            type: "llm_call" as const,
+            name: String(b?.name ?? "tool_use"),
+            toolName: b?.name ? String(b.name) : undefined,
+            input: capture ? short(b?.input) : undefined,
+            status: "ok" as const,
+          }));
         revalex.trace({
           type: "llm_call",
           name: opts.name ?? "anthropic.messages.create",
           model: result?.model ?? params?.model,
           input: capture ? short(params?.messages) : undefined,
           output: capture && textOut ? short(textOut) : undefined,
+          steps: planned.length > 0 ? planned : undefined,
           tokensIn: result?.usage?.input_tokens,
           tokensOut: result?.usage?.output_tokens,
           latencyMs: Date.now() - t0,
@@ -78,8 +110,9 @@ export function instrumentAnthropic<T extends AnthropicLike>(
       } catch {
         /* capture must never break the app */
       }
-      return result;
-    } catch (err) {
+    }
+
+    function recordFailure(err: unknown): void {
       try {
         revalex.trace({
           type: "llm_call",
@@ -95,9 +128,8 @@ export function instrumentAnthropic<T extends AnthropicLike>(
       } catch {
         /* fail-open */
       }
-      throw err; // the app's error handling is untouched
     }
-  };
+  }) as T["messages"]["create"];
   return client;
 }
 
@@ -119,11 +151,22 @@ export function instrumentOpenAI<T extends OpenAILike>(
   const original = client.chat.completions.create.bind(client.chat.completions);
   const capture = opts.captureContent ?? true;
 
-  client.chat.completions.create = async (params: any, ...rest: any[]) => {
+  client.chat.completions.create = ((params: any, ...rest: any[]) => {
     const startedAt = new Date().toISOString();
     const t0 = Date.now();
+    let call: Promise<any>;
     try {
-      const result = await original(params, ...rest);
+      call = original(params, ...rest);
+    } catch (err) {
+      recordFailure(err);
+      throw err;
+    }
+    // See the Anthropic wrapper: observe, don't replace — the APIPromise
+    // the caller gets back keeps .withResponse()/.asResponse().
+    void Promise.resolve(call).then(recordSuccess, recordFailure);
+    return call;
+
+    function recordSuccess(result: any): void {
       try {
         const streaming = params?.stream === true;
         const textOut = streaming ? undefined : result?.choices?.[0]?.message?.content ?? undefined;
@@ -144,8 +187,9 @@ export function instrumentOpenAI<T extends OpenAILike>(
       } catch {
         /* fail-open */
       }
-      return result;
-    } catch (err) {
+    }
+
+    function recordFailure(err: unknown): void {
       try {
         revalex.trace({
           type: "llm_call",
@@ -161,8 +205,7 @@ export function instrumentOpenAI<T extends OpenAILike>(
       } catch {
         /* fail-open */
       }
-      throw err;
     }
-  };
+  }) as T["chat"]["completions"]["create"];
   return client;
 }

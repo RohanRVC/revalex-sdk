@@ -36,9 +36,12 @@ inputs:
     required: false
     default: "false"
   api-url:
-    description: "Revalex API base URL"
+    description: "Revalex API base URL. Override only for self-hosted or local dev."
     required: false
-    default: "http://localhost:4000"
+    # Production. A localhost default meant the documented three-input snippet
+    # could never work on a GitHub runner — nothing listens on :4000 there, so
+    # curl failed and `set -euo pipefail` aborted the step before any verdict.
+    default: "https://api.revalex.com"
   github-token:
     description: "Pass ${{ github.token }} to also post the verdict as a PR comment"
     required: false
@@ -83,20 +86,54 @@ runs:
            + (if $base != "" then {baselineExperimentId: $base} else {} end)
            + (if $minpr != "" then {minPassRate: ($minpr | tonumber)} else {} end)')
 
-        HTTP_CODE=$(curl -sS -o /tmp/revalex_check.json -w "%{http_code}" \
+        # `|| true` so a transport failure does NOT get eaten by pipefail
+        # before we can explain it. A gate that dies with a bare non-zero exit
+        # is indistinguishable from a gate that found a real regression.
+        HTTP_CODE=$(curl -sS --max-time 120 -o /tmp/revalex_check.json -w "%{http_code}" \
           -X POST "$API_URL/v1/checks" \
           -H "authorization: Bearer $REVALEX_API_KEY" \
           -H "content-type: application/json" \
-          -d "$BODY")
+          -d "$BODY" 2>/tmp/revalex_curl_err.txt) || true
 
-        if [ "$HTTP_CODE" -ge 400 ]; then
-          echo "::error::Revalex check request failed ($HTTP_CODE): $(jq -r '.error.message // "unknown error"' /tmp/revalex_check.json 2>/dev/null)"
+        if [ -z "$HTTP_CODE" ] || [ "$HTTP_CODE" = "000" ]; then
+          echo "::error::Revalex could not REACH the API at $API_URL — this is a connectivity/config problem, not a regression. $(cat /tmp/revalex_curl_err.txt 2>/dev/null | head -2)"
+          echo "::error::Check the api-url input (default https://api.revalex.com) and that the runner has network access."
           exit 1
         fi
 
-        PASSED=$(jq -r '.passed' /tmp/revalex_check.json)
-        CAND=$(jq -r '.candidate.versionLabel' /tmp/revalex_check.json)
-        BASE=$(jq -r '.baseline.versionLabel // "none (first run)"' /tmp/revalex_check.json)
+        if [ "$HTTP_CODE" -ge 400 ]; then
+          # A proxy/gateway (502/503/504) or WAF returns an HTML body, not our
+          # JSON error envelope. jq would fail to parse it and — under
+          # `set -euo pipefail` — that assignment would abort the whole step
+          # with a raw jq parse error and no useful diagnostic. `|| true`
+          # keeps the step alive; the fallback prints a body snippet so the
+          # developer sees WHAT came back (a gateway page) instead of a
+          # cryptic jq failure.
+          DETAIL=$(jq -r '.error.message // empty' /tmp/revalex_check.json 2>/dev/null || true)
+          if [ -z "$DETAIL" ]; then
+            DETAIL="non-JSON response (likely a proxy/gateway page): $(head -c 200 /tmp/revalex_check.json 2>/dev/null | tr '\n' ' ')"
+          fi
+          if [ "$HTTP_CODE" = "402" ]; then
+            echo "::error::Revalex: $DETAIL (plan/quota — the gate did not run)"
+          elif [ "$HTTP_CODE" = "401" ]; then
+            echo "::error::Revalex: unauthorized — check the api-key secret. The gate did not run."
+          else
+            echo "::error::Revalex check request failed ($HTTP_CODE): $DETAIL"
+          fi
+          exit 1
+        fi
+
+        # A 2xx with a missing/empty/non-JSON body must FAIL CLOSED with a
+        # clear message, not abort on a raw jq error under set -e. `|| true`
+        # keeps the step alive; PASSED stays empty and the "!= true" gate
+        # below blocks the deploy — an unreadable verdict is not a pass.
+        PASSED=$(jq -r 'if (.passed|type)=="boolean" then (.passed|tostring) else empty end' /tmp/revalex_check.json 2>/dev/null || true)
+        if [ -z "$PASSED" ]; then
+          echo "::error::Revalex returned $HTTP_CODE but no readable verdict (empty or non-JSON body). Failing closed — an unverifiable gate is not a pass."
+          exit 1
+        fi
+        CAND=$(jq -r '.candidate.versionLabel // "unknown"' /tmp/revalex_check.json 2>/dev/null || echo "unknown")
+        BASE=$(jq -r '.baseline.versionLabel // "none (first run)"' /tmp/revalex_check.json 2>/dev/null || echo "none")
         echo "passed=$PASSED" >> "$GITHUB_OUTPUT"
 
         {

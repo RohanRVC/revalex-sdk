@@ -1,4 +1,5 @@
 import type { Step } from "./contract.js";
+import { DEFAULT_BASE_URL, envBaseUrl } from "./client.js";
 
 /* ────────────────────────────────────────────────────────────────
  * RevalexApi — helpers for CI harnesses and scripts.
@@ -89,7 +90,10 @@ export class RevalexApi {
   constructor(opts: RevalexApiOptions) {
     if (!opts.apiKey) throw new RevalexApiError(401, "RevalexApi: apiKey is required");
     this.apiKey = opts.apiKey;
-    this.baseUrl = (opts.baseUrl ?? "http://localhost:4000").replace(/\/+$/, "");
+    // Production by default, REVALEX_API_URL to override — same rule as
+    // RevalexClient. A localhost default made the CI harness point at nothing
+    // on a build runner.
+    this.baseUrl = (opts.baseUrl ?? envBaseUrl() ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
     this.fetchFn = opts.fetchFn ?? fetch;
   }
 
@@ -113,8 +117,21 @@ export class RevalexApi {
   }
 
   /** Fetch a dataset's items — the inputs your harness should run. */
-  async getDatasetItems(datasetId: string): Promise<DatasetItem[]> {
-    const r = await this.request<{ items: DatasetItem[] }>("GET", `/v1/datasets/${datasetId}`);
+  async getDatasetItems(datasetId: string, opts: { limit?: number } = {}): Promise<DatasetItem[]> {
+    const limit = Math.min(Math.max(opts.limit ?? 1_000, 1), 1_000);
+    const r = await this.request<{ items: DatasetItem[]; totalItems?: number }>(
+      "GET",
+      `/v1/datasets/${datasetId}?limit=${limit}`,
+    );
+    // A truncated dataset must never gate a deploy silently: passing on the
+    // newest N items while the oldest regression cases go untested reads as
+    // "covered everything" when it didn't.
+    if (typeof r.totalItems === "number" && r.totalItems > r.items.length) {
+      throw new RevalexApiError(
+        400,
+        `dataset has ${r.totalItems} items but only ${r.items.length} were returned — the CI gate must run on the full set`,
+      );
+    }
     return r.items;
   }
 
@@ -129,12 +146,19 @@ export class RevalexApi {
 
   /** Submit your harness's outputs for dataset items. */
   async submitResults(experimentId: string, results: ExperimentResultInput[]): Promise<number> {
-    const r = await this.request<{ submitted: number }>(
-      "POST",
-      `/v1/experiments/${experimentId}/results`,
-      { results },
-    );
-    return r.submitted;
+    // The server caps one submission at 100 results. A single oversized POST
+    // used to fail AFTER runExperiment had already paid for every agent run —
+    // chunking makes 101-1000-item datasets work instead of always 400ing.
+    let submitted = 0;
+    for (let i = 0; i < results.length; i += 100) {
+      const r = await this.request<{ submitted: number }>(
+        "POST",
+        `/v1/experiments/${experimentId}/results`,
+        { results: results.slice(i, i + 100) },
+      );
+      submitted += r.submitted;
+    }
+    return submitted;
   }
 
   /** Grade all submitted results with the project's evaluators. */
